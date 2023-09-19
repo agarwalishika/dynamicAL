@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import math
 
-from src.utils import LogitLoss
+from utils import LogitLoss
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',

@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 import torch.nn as nn
 
-from src.utils import LogitLoss
+from utils import LogitLoss
 
 
 class CNNAvgPool(nn.Module):

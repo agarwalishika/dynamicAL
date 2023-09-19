@@ -1,11 +1,11 @@
 import time
 import torch
 import torch.nn.functional as F
-from src.data_loader import create_dataloder
+from data_loader import create_dataloder
 from backpack import backpack
 from backpack.extensions import (BatchGrad, BatchL2Grad)
 from tqdm import tqdm
-from src.utils import update_dataset
+from utils import update_dataset
 
 INF = 100000000
 
@@ -17,7 +17,7 @@ class NTK_active_memo:
         self.total_budget = self.topk * args.total_query_times
         self.query_g_idx = []
 
-    def get_batch_grad(self, pesudo_labels, model, idxs, images, nrom_sq):
+    def get_batch_grad(self, pesudo_labels, model, idxs, images, nrom_sq, dataset):
         if model.device == 'cuda':
             images = images.to(model.device)
         outputs = model(images)
@@ -26,7 +26,16 @@ class NTK_active_memo:
             labels = torch.nn.functional.one_hot(labels)
             loss_pool = model.compute_MSELoss(outputs, labels)
         else:
-            loss_pool = model.compute_CELoss(outputs, labels)
+            labels = torch.nn.functional.one_hot(labels)
+            temp = torch.zeros(outputs.shape)
+            for i in range(labels.shape[0]):
+                for j in range(labels.shape[1]):
+                    try:
+                        temp[i][j] = labels[i][j]
+                    except:
+                        hi = 9
+            temp = temp.to(labels.device)
+            loss_pool = model.compute_MSELoss(outputs, temp)
 
         model.zero_grad()
         with backpack(BatchGrad(), BatchL2Grad()):
@@ -64,7 +73,7 @@ class NTK_active_memo:
 
 
 
-    def get_pesudo_label(self, model, pool_loader, type='max'):
+    def get_pesudo_label(self, model, pool_loader, dataset, type='max'):
         idx_tensor = []
         pesudo_labels = []
         with torch.no_grad():
@@ -89,7 +98,7 @@ class NTK_active_memo:
         return pesudo_labels
 
 
-    def get_train_grad(self, model, train_loader):
+    def get_train_grad(self, model, train_loader, dataset):
         # NOTE: don't call zero_grad in this loop. need to agg all train grad!:
         for idxs, inputs, labels in train_loader:
             if model.device == 'cuda':
@@ -100,7 +109,7 @@ class NTK_active_memo:
                 labels = torch.nn.functional.one_hot(labels)
                 loss_train = model.compute_MSELoss(outputs, labels)
             else:
-                loss_train = model.compute_CELoss(outputs, labels)
+                loss_train = model.compute_MSELoss(outputs, labels.to(torch.float32))
             loss_train.backward()
         train_grad = model.collect_grad().reshape(1,-1)
         return train_grad
@@ -109,13 +118,13 @@ class NTK_active_memo:
     def query(self, args, model, train_loader, pool_loader, train_data, pool_data):
         # 1.get pesudo label for pool_loader
         model.eval()
-        pesudo_labels = self.get_pesudo_label(model, pool_loader)
+        pesudo_labels = self.get_pesudo_label(model, pool_loader, args.dataset_str)
         model.zero_grad()
         torch.cuda.empty_cache()
 
         # 2.get train grad
         temp_train_dataloader = create_dataloder(args, train_data, shuffle=False, certain_batch_size=1)
-        train_grad = self.get_train_grad(model, temp_train_dataloader)
+        train_grad = self.get_train_grad(model, temp_train_dataloader, args.dataset_str)
 
         model.zero_grad()
         torch.cuda.empty_cache()
@@ -126,7 +135,7 @@ class NTK_active_memo:
         sq_sum_of_pool = []
         t = time.time()
         for idxs, images, _ in tqdm(small_pool_loader):
-            batch_grad_cache, grad_square_cache = self.get_batch_grad(pesudo_labels, model, idxs, images, nrom_sq=True)
+            batch_grad_cache, grad_square_cache = self.get_batch_grad(pesudo_labels, model, idxs, images, nrom_sq=True, dataset=args.dataset_str)
             torch.cuda.empty_cache()
             sim_with_train.append((train_grad * batch_grad_cache).sum(dim=1, keepdim=True) )
             del batch_grad_cache
@@ -160,7 +169,7 @@ class NTK_active_memo:
             else:
                 de_inf = []
                 for idxs, images, _ in tqdm(small_pool_loader):
-                    batch_grad_cache, _ = self.get_batch_grad(pesudo_labels, model, idxs, images, nrom_sq=False)
+                    batch_grad_cache, _ = self.get_batch_grad(pesudo_labels, model, idxs, images, nrom_sq=False, dataset=args.dataset_str)
                     torch.cuda.empty_cache()
 
                     if args.norm_inf:

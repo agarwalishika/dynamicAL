@@ -5,9 +5,9 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-from src.data_loader import load_data, create_dataloder
-from src.main_utils import epoch_check, init_model, init_active_method, init_logger, need_query
-from src.utils import set_seed
+from data_loader import load_data, create_dataloder
+from main_utils import epoch_check, init_model, init_active_method, init_logger, need_query
+from utils import set_seed
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 parent_path = os.path.abspath(os.path.join(dir_path, os.pardir))
@@ -16,17 +16,17 @@ parent_path = os.path.abspath(os.path.join(dir_path, os.pardir))
 def parsers_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--no_cuda', default=False, help='Disables CUDA training.')
-    parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--log_type', type=str, default='None', help='None, txt, tb')
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--log_type', type=str, default='txt', help='None, txt, tb')
     parser.add_argument('--save_folder_name', type=str, default='txt_logs')
     # regular training args
-    parser.add_argument('--dataset_str', type=str, default='imbalanced_cf10',
+    parser.add_argument('--dataset_str', type=str, default='fashion',
                         help='[cf10, mnist, svhn, caltech101; imbalanced_cf10].')
     parser.add_argument('--MSE', type=int, default=0)
-    parser.add_argument('--lr', type=float, default=0.005, help='Initial learning rate.')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate.')
     parser.add_argument('--momentum', type=float, default=0.0, help='SGD momentum.')
-    parser.add_argument('--hidden', type=int, default=16, help='Number of hidden units.')
-    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--hidden', type=int, default=100, help='Number of hidden units.')
+    parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--base_model', type=str, default="mlp", help='[cnn_avgpool, vgg, mlp, cnn, resnet]')
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--test_interval', type=int, default=5)
@@ -42,13 +42,13 @@ def parsers_parser():
     parser.add_argument('--inf_type', type=str, default='full', help='residual, full')
     parser.add_argument('--wo_train_sim', type=int, default=0)
     # active args
-    parser.add_argument('--final_extra_epochs', type=int, default=150)
+    parser.add_argument('--final_extra_epochs', type=int, default=30)
     parser.add_argument('--init_label_perC', type=int, default=None)
     parser.add_argument('--init_label_num', type=float, default=None)
     parser.add_argument('--budget_num_per_query', type=float, default=500)
     parser.add_argument('--total_query_times', type=int, default=5,
                         help='how many times we can do queries, -1 denotes for no query time restriction')
-    parser.add_argument('--query_interval', nargs='+', type=int, default=[])
+    parser.add_argument('--query_interval', nargs='+', type=int, default=[140, 100, 80, 80, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70])
     parser.add_argument('--fixed_query_interval', type=int, default=5)
     parser.add_argument('--starting_epoch', type=int, default=1)
     parser.add_argument('--reinit', type=int, default=0)
@@ -122,11 +122,12 @@ def train(args, model, optimizer, train_loader, epoch, writer):
             labels = labels.to(model.device)
         optimizer.zero_grad()
         outputs = model(inputs)
+        label_arm = torch.nn.functional.one_hot(labels, outputs.shape[-1]).float()
         if model.MSE:
             labels = torch.nn.functional.one_hot(labels)
             loss_train = model.compute_MSELoss(outputs, labels)
         else:
-            loss_train = model.compute_CELoss(outputs, labels)
+            loss_train = model.compute_CELoss(outputs, label_arm)
 
         loss_train.backward()
         optimizer.step()
@@ -155,7 +156,7 @@ def main(args):
     test_loader = create_dataloder(args, test_data, shuffle=False)
     pool_loader = create_dataloder(args, pool_data, shuffle=False)
 
-    model = init_model(args)
+    model = init_model(args, train_data)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     if args.total_query_times > 0:

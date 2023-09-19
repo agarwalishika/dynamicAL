@@ -8,11 +8,14 @@ import torch
 from PIL import Image
 from torchvision.transforms import transforms
 
-from src.my_caltech import myCaltech
-from src.my_cifar import CIFAR10 as myCIFAR10
-from src.my_mnist import myMNIST
-from src.my_svhn import mySVHN
-from src.utils import read_label_file, read_image_file, enhance, set_seed
+from load_data_addon import Bandit_multi
+
+from my_caltech import myCaltech
+from my_cifar import CIFAR10 as myCIFAR10
+from my_mnist import myMNIST
+from my_svhn import mySVHN
+from my_class_data import myClassData
+from utils import read_label_file, read_image_file, enhance, set_seed
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 parent_path = os.path.abspath(os.path.join(dir_path, os.pardir))
@@ -117,6 +120,52 @@ def cf10_load_data(init_label_num, init_label_perC=None, part=False, class_ratio
            (test_data, test_targets, np.array(list(range(test_targets.shape[0])))),\
            (train_data[idx_pool], train_targets[idx_pool], idx_pool)
 
+
+def load_class_data(init_label_num=None, init_label_perC=None, dataset_name='letter'):
+    assert init_label_num is not None or init_label_perC is not None
+    assert init_label_num is None or init_label_perC is None
+
+    data = Bandit_multi(dataset_name)
+    X = data.X
+    Y = data.y
+
+    if dataset_name != 'letter' and dataset_name != 'fashion':
+        Y = np.array(Y)
+        Y = (Y.astype(np.int64) - 1)
+
+    train_size = int(len(X) * 2 / 3)
+    data_train = X[:train_size]
+    labels_train = Y[:train_size]
+    labels_train = np.array([int(w) for w in labels_train])
+    data_test = X[train_size:]
+    labels_test = Y[train_size:]
+    labels_test = np.array([int(w) for w in labels_test])
+
+    raw_dim = data_train[0].reshape(-1,).shape[0]
+    class_num = max(labels_train) + 1
+    min_class = min(labels_train)
+
+    train_num = data_train.shape[0]
+
+    if init_label_num is not None:
+        split_idx = int(init_label_num)
+        idx_range = list(range(train_num))
+        random.shuffle(idx_range)
+        idx_train = np.array(idx_range[:split_idx])
+        idx_pool = np.array(idx_range[split_idx:])
+    else:
+        total_idx_list = []
+        for i in range(min_class, class_num + min_class):
+            class_ilabel_idxs = list(np.where(labels_train == i)[0])
+            random.shuffle(class_ilabel_idxs)
+            total_idx_list.extend(class_ilabel_idxs[:init_label_perC])
+        idx_train = np.array(total_idx_list)
+        idx_pool = np.array(list(set(list(range(labels_train.shape[0]))) - set(total_idx_list)))
+
+
+    return raw_dim, class_num, (data_train[idx_train], labels_train[idx_train], idx_train), \
+           (data_test, labels_test,  np.array(list(range(labels_test.shape[0])))   ),\
+           (data_train[idx_pool], labels_train[idx_pool], idx_pool)
 
 def mnist_load_data(init_label_num=None, init_label_perC=None):
     assert init_label_num is not None or init_label_perC is not None
@@ -266,7 +315,12 @@ def caltech101_load_data(init_label_num, init_label_perC):
 def load_data(args):
     assert args.train_imbalance + args.test_imbalance + args.pool_imbalance > 0
     set_seed(args.seed)
-    if args.dataset_str == 'cf10':
+    if args.dataset_str in ['letter', 'covertype', 'fashion', 'adult', 'MagicTelescope', 'shuttle']:
+        raw_dim, class_num, train_data, test_data, pool_data = load_class_data(init_label_num=args.init_label_num, init_label_perC=args.init_label_perC, dataset_name=args.dataset_str)
+        args.input_dim = raw_dim
+        args.class_num = class_num
+        return train_data, test_data, pool_data
+    elif args.dataset_str == 'cf10':
         raw_dim, class_num, train_data, test_data, pool_data = cf10_load_data(init_label_num=args.init_label_num,
                                                         init_label_perC=args.init_label_perC)
         args.input_dim = raw_dim
@@ -357,8 +411,12 @@ def load_data(args):
 
 def create_dataloder(args, data, shuffle, certain_batch_size=None):
     bz = args.batch_size if certain_batch_size is None else certain_batch_size
-
-    if 'cf10' in args.dataset_str:
+    if args.dataset_str in ['letter', 'covertype', 'fashion', 'adult', 'MagicTelescope', 'shuttle']:
+        transform = transforms.Compose(
+            [transforms.ToTensor()])
+        dataset = myClassData(root='', transform=transform, dataset=data)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=bz, shuffle=shuffle, num_workers=0)
+    elif 'cf10' in args.dataset_str:
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))])
         dataset = myCIFAR10(root='', transform=transform, dataset=data)
         loader = torch.utils.data.DataLoader(dataset, batch_size=bz, shuffle=shuffle, num_workers=4)

@@ -12,7 +12,7 @@ from torchvision.datasets import VisionDataset
 
 from torchvision.datasets.utils import download_url, download_and_extract_archive
 
-from src.utils import read_label_file, read_image_file
+from utils import read_label_file, read_image_file
 
 
 class myMNIST(VisionDataset):

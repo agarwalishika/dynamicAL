@@ -1,12 +1,56 @@
 import os
 from backpack import extend
-from src.caltech_resnet18 import caltech_resnet18
-from src.models import CNNnet, MLP, ResNet18, VGG11, CNNAvgPool
-from src.ntk_active_memo_efficient import NTK_active_memo
+from caltech_resnet18 import caltech_resnet18
+from models import CNNnet, MLP, ResNet18, ResNet10, VGG11, CNNAvgPool
+from ntk_active_memo_efficient import NTK_active_memo
+import torch.nn as nn
+from utils import LogitLoss
+import torch
+
 
 from torch.utils.tensorboard import SummaryWriter
 dir_path = os.path.dirname(os.path.realpath(__file__))
 parent_path = os.path.abspath(os.path.join(dir_path, os.pardir))
+
+class net(nn.Module):
+    def __init__(self, dev, dim, hidden_size=100, k=10):
+        super(net, self).__init__()
+        self.fc1 = nn.Linear(dim, hidden_size)
+        self.activate = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, k)
+
+        self.device = f'cuda:{dev}'
+        os.environ['CUDA_VISIBLE_DEVICES'] = dev
+        self.cuda()
+
+        self.num_params = self.count_parameters()
+        self.compute_CELoss = nn.CrossEntropyLoss()
+        self.compute_MSELoss = nn.MSELoss()
+        self.compute_LogitLoss = LogitLoss()
+
+    def forward(self, x, dataset):
+        return self.fc2(self.activate(self.fc1(x.squeeze())))
+    
+    def count_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def count_parameters_each_layer(self):
+        return [p.numel() for p in self.parameters() if p.requires_grad]
+
+
+    def collect_grad_each_layer(self, layer_id):
+        # return self.parameters()[layer_id].grad.detach().reshape(-1,)
+        counter = 0
+        for p in self.parameters():
+            if p.requires_grad:
+                if counter == layer_id:
+                    return p.grad.detach().reshape(-1,)
+                else:
+                    counter += 1
+
+
+    def collect_grad(self):
+        return torch.cat([p.grad.detach().reshape(-1,) for _, p in self.named_parameters() if p.requires_grad], dim=0)
 
 
 def init_logger(args):
@@ -104,7 +148,7 @@ def init_active_method(args, model, **kwargs):
     return active_policy
 
 
-def init_model(args):
+def init_model(args, train_data=None):
     if args.base_model == 'cnn':
         model = CNNnet()
     elif args.base_model == 'cnn_avgpool':
@@ -115,7 +159,9 @@ def init_model(args):
         if args.dataset_str == 'caltech101':
             model = caltech_resnet18(args.class_num)
         else:
-            model = ResNet18()
+            input_dim = train_data[0][0].shape[0]
+            k = len(set(train_data[1]))
+            model = net('0', input_dim, k=k) #ResNet18()
     elif args.base_model == 'vgg':
         model = VGG11()
     else:
